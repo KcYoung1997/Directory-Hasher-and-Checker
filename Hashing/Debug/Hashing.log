@@ -1,0 +1,4 @@
+﻿  Source.cpp
+  You may be using a weak algorithm that has been retained for backwards compatibility. Please '#define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1' before including this .h file and prepend the class name with 'Weak::' to remove this warning.
+  Hashing.vcxproj -> C:\Users\KcY\Documents\Visual Studio 2015\Projects\Hashing\Debug\Hashing.exe
+  Hashing.vcxproj -> C:\Users\KcY\Documents\Visual Studio 2015\Projects\Hashing\Debug\Hashing.pdb (Partial PDB)
