@@ -24,7 +24,7 @@ Directory Hasher
 
 Crypto++
 =========
-Crypto++, written by [Wei Dai](http://www.weidai.com/), can be found on the Crypo++ [website](https://www.cryptopp.com/). A link to the below license can be found [here](https://www.cryptopp.com/License.txt).
+Crypto++, written by [Wei Dai](http://www.weidai.com/), can be found on the Crypo++ [github](https://github.com/weidai11/cryptopp). A link to the below license can be found [here](https://www.cryptopp.com/License.txt).
 
     The Crypto++ Library (as a compilation) is currently licensed under the Boost
     Software License 1.0 (http://www.boost.org/users/license.html).
