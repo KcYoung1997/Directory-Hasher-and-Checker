@@ -5,14 +5,16 @@
 #include <filesystem>
 
 #pragma comment( lib, "cryptlib.lib" )
-#include <Crypto++\cryptlib.h>
-#include <Crypto++\files.h>
-#include <Crypto++\hex.h>
-#include <Crypto++\sha.h>
-#include <Crypto++\MD5.h>
-#include <Crypto++\ripemd.h>
-#include <Crypto++\crc.h>
-#include <Crypto++\adler32.h>
+#include "Crypto++/cryptlib.h"
+#include "Crypto++/files.h"
+#include "Crypto++/hex.h"
+#include "Crypto++/sha.h"
+#include "Crypto++/MD5.h"
+#include "Crypto++/ripemd.h"
+#include "Crypto++/crc.h"
+#include "Crypto++/adler32.h"
+
+#include "Farm.h"
 
 using std::cout;
 using std::endl;
@@ -23,7 +25,105 @@ using std::ifstream;
 //Filesystem is a cross-platform standard library for interacting with filesystems/directorys
 //It removes the need to wrap the single platform solutions (Windows.h)
 //or to use external libraries (boost)
+//Although some platforms have only partial or no implementation
 namespace fs = std::experimental::filesystem;
+
+// TODO: Tasks: Hash file, check lists, output
+
+class WriteTask : public Task
+{
+	static std::mutex coutLock;
+	const char message;
+public:
+	//Constructors
+	WriteTask(const char _message) : message(_message) {}
+	void run() override
+	{
+		coutLock.lock();
+		cout << message;
+		coutLock.unlock();
+	}
+};
+std::mutex WriteTask::coutLock;
+
+class CheckTask : public Task
+{
+	vector<string>* goodHashes;
+	vector<string>* badHashes;
+	bool hashOnly;
+	Farm* farm;
+};
+
+class HashTask : public Task
+{
+	CryptoPP::HashTransformation* method;
+	const char* filename;
+	vector<string>* goodHashes;
+	vector<string>* badHashes;
+	vector<string>* foundHashes;
+	bool hashOnly;
+	Farm* farm;
+public:
+	//Constructors
+	HashTask(Farm* _farm,
+		CryptoPP::HashTransformation* _method,
+		const char* _filename,
+		vector<string>* _foundHashes = nullptr,
+		vector<string>* _goodHashes = nullptr,
+		vector<string>* _badHashes = nullptr,
+		bool _hashOnly = false) :
+		method(_method), filename(_filename), goodHashes(_goodHashes), badHashes(_badHashes), foundHashes(_foundHashes), hashOnly(_hashOnly), farm(_farm) {}
+	void run() override
+	{
+		string result;
+		try {
+			CryptoPP::FileSource(filename, true, new
+				CryptoPP::HashFilter(*method, new CryptoPP::HexEncoder(new
+					CryptoPP::StringSink(result), false)));
+		}
+		catch (CryptoPP::FileStore::Err e) {
+			std::string buf("Error opening file: ");
+			buf.append(filename);
+			farm->addTask(new WriteTask(*buf.c_str()));
+			return;
+		}
+		std::string buf(filename);
+		if (foundHashes && !foundHashes->empty())
+		{
+			for (auto found : *foundHashes) {
+				if (result == found) {
+					buf.append("DUPLICATE ");
+					return;
+				}
+			}
+		}
+		if (badHashes && !badHashes->empty())
+		{
+			for (auto bad : *badHashes) {
+				if (result == bad) {
+					buf.append("BAD ");
+					return;
+				}
+			}
+		}
+		if (goodHashes && !goodHashes->empty())
+		{
+			for (auto good : *goodHashes) {
+				if (result == good) {
+					buf.append("GOOD ");
+					return;
+				}
+			}
+		}
+		if (!buf.empty()) {
+			buf.append("\n");
+		}
+		buf.append(filename);
+		buf.append("\n");
+		farm->addTask(new WriteTask(*buf.c_str()));
+	}
+};
+
 
 int printUsage(char* filename) {
 	cout << "Usage: "<< filename <<" -m [METHOD] [OPTION] [DIR]" << endl
@@ -75,8 +175,9 @@ int main(int argCount, char *arg[]) {
 	//store the class we're using to hash with
 	CryptoPP::HashTransformation* method = new CryptoPP::SHA256;
 	//store the good and bad hashes lists
-	vector<string> badHashes;
-	vector<string> goodHashes;
+	vector<string>* badHashes = new vector<string>;
+	vector<string>* goodHashes = new vector<string>;
+	vector<string>* foundHashes = new vector<string>;
 	for (auto i = 1; i < argCount - 1; i++) {
 		string args = arg[i];
 		if (args == "-h" || arg[i] == "--help") {
@@ -107,7 +208,7 @@ int main(int argCount, char *arg[]) {
 				return 1;
 			}
 			try {
-				badHashes = getHashes(arg[i], method->DigestSize());
+				*badHashes = getHashes(arg[i], method->DigestSize());
 			}
 			catch (...) {
 				cout << "Exception opening/reading bad hash file: " << arg[i] << endl;
@@ -123,7 +224,7 @@ int main(int argCount, char *arg[]) {
 				return 1;
 			}
 			try {
-				goodHashes = getHashes(arg[i], method->DigestSize());
+				*goodHashes = getHashes(arg[i], method->DigestSize());
 			}
 			catch (...) {
 				cout << "Exception opening/reading good hash file: " << arg[i] << endl;
@@ -139,47 +240,20 @@ int main(int argCount, char *arg[]) {
 			hashOnly = true;
 		}
 	}
-	//Define a lambda to run per file so that we don't write it twice
-	auto perFile = [&](auto& p) {
-		string result = hash(p.path().string().c_str(), method);
-		//if we are printing the hash, do so
-		if (!hashOnly) {
-			cout << p << endl;
-		}
-		//If we have hashes to check against, do so
-		if (!goodHashes.empty() || !badHashes.empty()) {
-			for (auto good : goodHashes) {
-				if (result == good) {
-					cout << "GOOD" << endl << result << endl;
-					return;
-				}
-			}
-			for (auto bad : badHashes) {
-				if (result == bad) {
-					cout << "BAD" << endl << result << endl;
-					return;
-				}
-			}
-			cout << "UNDECIDED" << endl;
-		}
-		cout << result << endl;
-	};
-	if (recursive) {
-		//Loop through every file in the directory tree recursively
-		for (auto& p : fs::recursive_directory_iterator(arg[argCount - 1]))
-		{
-			//Skip if is directory not file
-			if (fs::is_directory(p)) continue;
-			perFile(p);
-		}
+	Farm* farm = new Farm;
+	//Loop through every file in the directory tree recursively, recursively if requested
+	for (auto& p : fs::directory_iterator(arg[argCount - 1]))
+	{
+		//Skip if is directory not file
+		if (fs::is_directory(p)) continue;
+		farm->addTask(new HashTask(farm, method, p.path().string().c_str(), foundHashes, goodHashes, badHashes, hashOnly));
 	}
-	else {
-		//Loop through every file in the current directory
-		for (auto& p : fs::directory_iterator(arg[argCount - 1]))
-		{
-			//Skip if is directory not file
-			if (fs::is_directory(p)) continue;
-			perFile(p);
-		}
-	}
+	//Ends can be addedby tasks allowing more tasks to be added indefinitely
+	//Without an end task worker threads sit in a spinlock waiting for more tasks.
+	farm->addEnd();
+	farm->run();
+	delete farm;
+	delete badHashes;
+	delete goodHashes;
+	delete foundHashes;
 }
